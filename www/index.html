@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Location Sender</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-white min-h-screen flex items-center justify-center p-4">
+
+  <div class="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
+    <div class="flex items-center justify-between">
+      <h1 class="text-xl font-bold tracking-tight">Location Sender</h1>
+      <span id="netBadge" class="text-xs px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-400 font-medium">
+        Online
+      </span>
+    </div>
+
+    <div class="bg-slate-800/60 rounded-xl p-4 space-y-2 text-sm">
+      <div class="flex justify-between">
+        <span class="text-slate-400">Tracking Status:</span>
+        <span id="trackStatus" class="font-semibold text-amber-400">Stopped</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-slate-400">Latitude / Longitude:</span>
+        <span id="coordsText" class="font-mono text-xs">-- , --</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-slate-400">Offline Queued Points:</span>
+        <span id="queueCount" class="font-semibold text-sky-400">0</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-slate-400">Last Synced:</span>
+        <span id="lastSync" class="text-slate-300 text-xs">Never</span>
+      </div>
+    </div>
+
+    <div class="flex gap-3">
+      <button id="startBtn" class="flex-1 bg-emerald-600 hover:bg-emerald-500 active:scale-95 transition py-3 rounded-xl font-semibold">
+        Start Sharing
+      </button>
+      <button id="stopBtn" disabled class="flex-1 bg-rose-600/40 text-slate-400 cursor-not-allowed py-3 rounded-xl font-semibold">
+        Stop
+      </button>
+    </div>
+
+    <p id="msgBox" class="text-xs text-slate-400 text-center">
+      Location permission allow karein aur Start Sharing par click karein.
+    </p>
+  </div>
+
+  <!-- Firebase SDKs -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import { getDatabase, ref, set, push, onDisconnect } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyBreKyB3T86Splnglbkc_0UovQWRSjeMYg",
+      authDomain: "location-4ccb2.firebaseapp.com",
+      databaseURL: "https://location-4ccb2-default-rtdb.firebaseio.com",
+      projectId: "location-4ccb2",
+      storageBucket: "location-4ccb2.firebasestorage.app",
+      messagingSenderId: "93197601592",
+      appId: "1:93197601592:web:dd7e816a55b0c8ccd98fcd"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+
+    const DEVICE_ID = "device_01"; // Multiple devices ke liye isey dynamic bana sakte hain
+    const liveRef = ref(db, `devices/${DEVICE_ID}/live`);
+    const historyRef = ref(db, `devices/${DEVICE_ID}/history`);
+    const statusRef = ref(db, `devices/${DEVICE_ID}/status`);
+
+    let watchId = null;
+    const QUEUE_KEY = "offline_location_queue";
+
+    const netBadge = document.getElementById("netBadge");
+    const trackStatus = document.getElementById("trackStatus");
+    const coordsText = document.getElementById("coordsText");
+    const queueCount = document.getElementById("queueCount");
+    const lastSync = document.getElementById("lastSync");
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const msgBox = document.getElementById("msgBox");
+
+    function getQueue() {
+      return JSON.parse(localStorage.getItem(QUEUE_KEY) || "[]");
+    }
+
+    function saveToQueue(payload) {
+      const q = getQueue();
+      q.push(payload);
+      localStorage.setItem(QUEUE_KEY, JSON.stringify(q));
+      queueCount.textContent = q.length;
+    }
+
+    async function syncOfflineQueue() {
+      if (!navigator.onLine) return;
+      const q = getQueue();
+      if (q.length === 0) return;
+
+      try {
+        for (const item of q) {
+          await push(historyRef, item);
+        }
+        // Last queued point ko live location par update karein
+        await set(liveRef, q[q.length - 1]);
+        localStorage.removeItem(QUEUE_KEY);
+        queueCount.textContent = "0";
+        lastSync.textContent = new Date().toLocaleTimeString();
+        msgBox.textContent = `${q.length} offline points synced successfully.`;
+      } catch (err) {
+        console.error("Queue sync error:", err);
+      }
+    }
+
+    function updateNetworkUI() {
+      if (navigator.onLine) {
+        netBadge.textContent = "Online";
+        netBadge.className = "text-xs px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-400 font-medium";
+        syncOfflineQueue();
+      } else {
+        netBadge.textContent = "Offline (Queuing)";
+        netBadge.className = "text-xs px-2.5 py-1 rounded-full bg-rose-500/20 text-rose-400 font-medium";
+      }
+    }
+
+    window.addEventListener("online", updateNetworkUI);
+    window.addEventListener("offline", updateNetworkUI);
+    updateNetworkUI();
+    queueCount.textContent = getQueue().length;
+
+    startBtn.addEventListener("click", () => {
+      if (!("geolocation" in navigator)) {
+        msgBox.textContent = "Is browser/device mein Geolocation supported nahi hai.";
+        return;
+      }
+
+      // Firebase presence: agar internet achanak band ho toh status offline mark ho jaye
+      set(statusRef, { online: true, updatedAt: Date.now() });
+      onDisconnect(statusRef).set({ online: false, updatedAt: Date.now() });
+
+      watchId = navigator.geolocation.watchPosition(
+        async (pos) => {
+          const payload = {
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            accuracy: Math.round(pos.coords.accuracy),
+            timestamp: Date.now()
+          };
+
+          coordsText.textContent = `${payload.lat.toFixed(5)}, ${payload.lng.toFixed(5)}`;
+
+          if (navigator.onLine) {
+            try {
+              await set(liveRef, payload);
+              await set(statusRef, { online: true, updatedAt: Date.now() });
+              lastSync.textContent = new Date().toLocaleTimeString();
+              msgBox.textContent = "Live location sharing active hai.";
+            } catch (e) {
+              saveToQueue(payload);
+            }
+          } else {
+            saveToQueue(payload);
+            msgBox.textContent = "Internet off hai — location locally save ho rahi hai.";
+          }
+        },
+        (err) => {
+          msgBox.textContent = `GPS Error: ${err.message}`;
+        },
+        {
+          enableHighAccuracy: true,
+          maximumAge: 0,
+          timeout: 10000
+        }
+      );
+
+      trackStatus.textContent = "Active";
+      trackStatus.className = "font-semibold text-emerald-400";
+      startBtn.disabled = true;
+      startBtn.className = "flex-1 bg-emerald-600/40 text-slate-400 cursor-not-allowed py-3 rounded-xl font-semibold";
+      stopBtn.disabled = false;
+      stopBtn.className = "flex-1 bg-rose-600 hover:bg-rose-500 active:scale-95 transition py-3 rounded-xl font-semibold";
+    });
+
+    stopBtn.addEventListener("click", async () => {
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+      }
+      if (navigator.onLine) {
+        await set(statusRef, { online: false, updatedAt: Date.now() });
+      }
+      trackStatus.textContent = "Stopped";
+      trackStatus.className = "font-semibold text-amber-400";
+      msgBox.textContent = "Location sharing band kar di gayi hai.";
+      startBtn.disabled = false;
+      startBtn.className = "flex-1 bg-emerald-600 hover:bg-emerald-500 active:scale-95 transition py-3 rounded-xl font-semibold";
+      stopBtn.disabled = true;
+      stopBtn.className = "flex-1 bg-rose-600/40 text-slate-400 cursor-not-allowed py-3 rounded-xl font-semibold";
+    });
+  </script>
+</body>
+</html>
