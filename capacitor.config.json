@@ -1,0 +1,8 @@
+{
+  "appId": "com.familytrack.sender",
+  "appName": "Location Sender",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  }
+}
