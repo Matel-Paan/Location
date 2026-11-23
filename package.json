@@ -1,0 +1,11 @@
+{
+  "name": "family-track-sender",
+  "version": "1.0.0",
+  "description": "Live Location Sender App",
+  "dependencies": {
+    "@capacitor-community/background-geolocation": "^1.2.10",
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/cli": "^6.1.2",
+    "@capacitor/core": "^6.1.2"
+  }
+}
