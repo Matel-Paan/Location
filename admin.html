@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Live Tracker</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-white h-screen flex flex-col">
+
+  <!-- Top Bar -->
+  <header class="bg-slate-900 border-b border-slate-800 px-4 py-3 flex items-center justify-between">
+    <div>
+      <h1 class="text-lg font-bold leading-tight">Admin Live Map</h1>
+      <p class="text-xs text-slate-400">Device: <span class="text-slate-200 font-mono">device_01</span></p>
+    </div>
+    <span id="deviceBadge" class="text-xs px-3 py-1 rounded-full bg-slate-800 text-slate-400 font-semibold">
+      Waiting...
+    </span>
+  </header>
+
+  <!-- Map Container -->
+  <div id="map" class="flex-1 w-full bg-slate-900"></div>
+
+  <!-- Bottom Info Card -->
+  <footer class="bg-slate-900 border-t border-slate-800 p-4 grid grid-cols-3 gap-2 text-center text-xs">
+    <div class="bg-slate-800/70 rounded-xl p-2.5">
+      <p class="text-slate-400">Coordinates</p>
+      <p id="coords" class="font-mono text-slate-100 mt-1">--</p>
+    </div>
+    <div class="bg-slate-800/70 rounded-xl p-2.5">
+      <p class="text-slate-400">Accuracy</p>
+      <p id="accuracy" class="font-semibold text-sky-400 mt-1">-- m</p>
+    </div>
+    <div class="bg-slate-800/70 rounded-xl p-2.5">
+      <p class="text-slate-400">Last Updated</p>
+      <p id="lastUpdated" class="font-semibold text-amber-400 mt-1">--</p>
+    </div>
+  </footer>
+
+  <!-- Google Maps JS API -->
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCxUf2eNGTTOIG0ySfG7wgCEGVaSbl70o8"></script>
+
+  <!-- Firebase SDKs -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyBreKyB3T86Splnglbkc_0UovQWRSjeMYg",
+      authDomain: "location-4ccb2.firebaseapp.com",
+      databaseURL: "https://location-4ccb2-default-rtdb.firebaseio.com",
+      projectId: "location-4ccb2",
+      storageBucket: "location-4ccb2.firebasestorage.app",
+      messagingSenderId: "93197601592",
+      appId: "1:93197601592:web:dd7e816a55b0c8ccd98fcd"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+
+    const DEVICE_ID = "device_01";
+    const liveRef = ref(db, `devices/${DEVICE_ID}/live`);
+    const statusRef = ref(db, `devices/${DEVICE_ID}/status`);
+
+    const deviceBadge = document.getElementById("deviceBadge");
+    const coordsEl = document.getElementById("coords");
+    const accuracyEl = document.getElementById("accuracy");
+    const lastUpdatedEl = document.getElementById("lastUpdated");
+
+    // Default map center (India)
+    const map = new google.maps.Map(document.getElementById("map"), {
+      center: { lat: 21.1702, lng: 72.8311 },
+      zoom: 15,
+      disableDefaultUI: false
+    });
+
+    const marker = new google.maps.Marker({
+      map: map,
+      title: "Device Location"
+    });
+
+    // Listen to Online / Offline status
+    onValue(statusRef, (snapshot) => {
+      const data = snapshot.val();
+      if (!data) return;
+
+      if (data.online) {
+        deviceBadge.textContent = "Online (Live)";
+        deviceBadge.className = "text-xs px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-400 font-semibold";
+      } else {
+        deviceBadge.textContent = "Offline (Last Known)";
+        deviceBadge.className = "text-xs px-3 py-1 rounded-full bg-rose-500/20 text-rose-400 font-semibold";
+      }
+    });
+
+    // Listen to Live / Last Known Location
+    onValue(liveRef, (snapshot) => {
+      const loc = snapshot.val();
+      if (!loc) return;
+
+      const pos = { lat: loc.lat, lng: loc.lng };
+      marker.setPosition(pos);
+      map.panTo(pos);
+
+      coordsEl.textContent = `${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}`;
+      accuracyEl.textContent = `${loc.accuracy || 0} m`;
+      lastUpdatedEl.textContent = new Date(loc.timestamp).toLocaleTimeString();
+    });
+  </script>
+</body>
+</html>
