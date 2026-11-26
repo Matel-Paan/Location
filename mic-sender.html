@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Live Mic Sender</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-white min-h-screen flex items-center justify-center p-4">
+
+  <div class="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
+    <div class="flex items-center justify-between">
+      <h1 class="text-xl font-bold">Live Audio Sender</h1>
+      <span id="micBadge" class="text-xs px-3 py-1 rounded-full bg-slate-800 text-slate-400 font-semibold">
+        Mic OFF
+      </span>
+    </div>
+
+    <div class="bg-slate-800/60 rounded-xl p-4 space-y-2 text-sm">
+      <div class="flex justify-between">
+        <span class="text-slate-400">Device ID:</span>
+        <span class="font-mono text-slate-200">device_01</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-slate-400">Connection:</span>
+        <span id="connStatus" class="font-semibold text-amber-400">Idle</span>
+      </div>
+    </div>
+
+    <div class="flex gap-3">
+      <button id="startMicBtn" class="flex-1 bg-emerald-600 hover:bg-emerald-500 active:scale-95 transition py-3 rounded-xl font-semibold">
+        Start Mic
+      </button>
+      <button id="stopMicBtn" disabled class="flex-1 bg-rose-600/40 text-slate-400 cursor-not-allowed py-3 rounded-xl font-semibold">
+        Stop Mic
+      </button>
+    </div>
+
+    <p id="statusMsg" class="text-xs text-slate-400 text-center">
+      Start Mic par tap karein aur microphone permission Allow karein.
+    </p>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import { getDatabase, ref, set, push, remove, onValue, onChildAdded, onDisconnect } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyBreKyB3T86Splnglbkc_0UovQWRSjeMYg",
+      authDomain: "location-4ccb2.firebaseapp.com",
+      databaseURL: "https://location-4ccb2-default-rtdb.firebaseio.com",
+      projectId: "location-4ccb2",
+      storageBucket: "location-4ccb2.firebasestorage.app",
+      messagingSenderId: "93197601592",
+      appId: "1:93197601592:web:dd7e816a55b0c8ccd98fcd"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+
+    const DEVICE_ID = "device_01";
+    const micStatusRef = ref(db, `devices/${DEVICE_ID}/micStatus`);
+    const webrtcRef = ref(db, `devices/${DEVICE_ID}/webrtc`);
+    const offerRef = ref(db, `devices/${DEVICE_ID}/webrtc/offer`);
+    const answerRef = ref(db, `devices/${DEVICE_ID}/webrtc/answer`);
+    const adminCandRef = ref(db, `devices/${DEVICE_ID}/webrtc/adminCandidates`);
+    const senderCandRef = ref(db, `devices/${DEVICE_ID}/webrtc/senderCandidates`);
+
+    const rtcConfig = {
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" }
+      ]
+    };
+
+    let localStream = null;
+    let pc = null;
+    let unsubOffer = null;
+    let unsubCand = null;
+    let lastOfferSdp = null;
+
+    const micBadge = document.getElementById("micBadge");
+    const connStatus = document.getElementById("connStatus");
+    const startMicBtn = document.getElementById("startMicBtn");
+    const stopMicBtn = document.getElementById("stopMicBtn");
+    const statusMsg = document.getElementById("statusMsg");
+
+    function closePeer() {
+      if (unsubCand) { unsubCand(); unsubCand = null; }
+      if (pc) { pc.close(); pc = null; }
+    }
+
+    startMicBtn.addEventListener("click", async () => {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true },
+          video: false
+        });
+
+        await remove(webrtcRef);
+        await set(micStatusRef, { active: true, updatedAt: Date.now() });
+        onDisconnect(micStatusRef).set({ active: false, updatedAt: Date.now() });
+
+        micBadge.textContent = "Mic LIVE";
+        micBadge.className = "text-xs px-3 py-1 rounded-full bg-rose-500/20 text-rose-400 font-semibold animate-pulse";
+        connStatus.textContent = "Waiting for Admin...";
+        connStatus.className = "font-semibold text-sky-400";
+        statusMsg.textContent = "Mic active hai. Jab Admin Listen dabayega, audio live stream hoga.";
+
+        startMicBtn.disabled = true;
+        startMicBtn.className = "flex-1 bg-emerald-600/40 text-slate-400 cursor-not-allowed py-3 rounded-xl font-semibold";
+        stopMicBtn.disabled = false;
+        stopMicBtn.className = "flex-1 bg-rose-600 hover:bg-rose-500 active:scale-95 transition py-3 rounded-xl font-semibold";
+
+        unsubOffer = onValue(offerRef, async (snapshot) => {
+          const offer = snapshot.val();
+          if (!offer || !offer.sdp) {
+            lastOfferSdp = null;
+            return;
+          }
+          if (offer.sdp === lastOfferSdp) return;
+          lastOfferSdp = offer.sdp;
+
+          closePeer();
+          pc = new RTCPeerConnection(rtcConfig);
+
+          localStream.getTracks().forEach((track) => {
+            pc.addTrack(track, localStream);
+          });
+
+          pc.onicecandidate = (event) => {
+            if (event.candidate) {
+              push(senderCandRef, event.candidate.toJSON());
+            }
+          };
+
+          pc.onconnectionstatechange = () => {
+            if (!pc) return;
+            if (pc.connectionState === "connected") {
+              connStatus.textContent = "Streaming Live";
+              connStatus.className = "font-semibold text-emerald-400";
+            } else if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
+              connStatus.textContent = "Waiting for Admin...";
+              connStatus.className = "font-semibold text-sky-400";
+            }
+          };
+
+          const pendingCandidates = [];
+          await pc.setRemoteDescription(new RTCSessionDescription(offer));
+
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          await set(answerRef, { type: answer.type, sdp: answer.sdp });
+
+          for (const c of pendingCandidates) {
+            await pc.addIceCandidate(new RTCIceCandidate(c));
+          }
+
+          unsubCand = onChildAdded(adminCandRef, async (candSnap) => {
+            const cand = candSnap.val();
+            if (!cand || !pc) return;
+            if (pc.remoteDescription) {
+              await pc.addIceCandidate(new RTCIceCandidate(cand));
+            } else {
+              pendingCandidates.push(cand);
+            }
+          });
+        });
+
+      } catch (err) {
+        statusMsg.textContent = `Mic Error: ${err.message}`;
+      }
+    });
+
+    stopMicBtn.addEventListener("click", async () => {
+      if (unsubOffer) { unsubOffer(); unsubOffer = null; }
+      lastOfferSdp = null;
+      closePeer();
+
+      if (localStream) {
+        localStream.getTracks().forEach((t) => t.stop());
+        localStream = null;
+      }
+
+      await remove(webrtcRef);
+      await set(micStatusRef, { active: false, updatedAt: Date.now() });
+
+      micBadge.textContent = "Mic OFF";
+      micBadge.className = "text-xs px-3 py-1 rounded-full bg-slate-800 text-slate-400 font-semibold";
+      connStatus.textContent = "Stopped";
+      connStatus.className = "font-semibold text-amber-400";
+      statusMsg.textContent = "Microphone band kar diya gaya hai.";
+
+      startMicBtn.disabled = false;
+      startMicBtn.className = "flex-1 bg-emerald-600 hover:bg-emerald-500 active:scale-95 transition py-3 rounded-xl font-semibold";
+      stopMicBtn.disabled = true;
+      stopMicBtn.className = "flex-1 bg-rose-600/40 text-slate-400 cursor-not-allowed py-3 rounded-xl font-semibold";
+    });
+  </script>
+</body>
+</html>

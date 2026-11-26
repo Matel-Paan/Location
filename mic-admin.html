@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Live Audio</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-white min-h-screen flex items-center justify-center p-4">
+
+  <div class="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
+    <div class="flex items-center justify-between">
+      <div>
+        <h1 class="text-xl font-bold">Admin Audio Monitor</h1>
+        <p class="text-xs text-slate-400">Device: <span class="font-mono text-slate-200">device_01</span></p>
+      </div>
+      <span id="senderBadge" class="text-xs px-3 py-1 rounded-full bg-slate-800 text-slate-400 font-semibold">
+        Checking...
+      </span>
+    </div>
+
+    <div class="bg-slate-800/60 rounded-xl p-4 space-y-2 text-sm">
+      <div class="flex justify-between">
+        <span class="text-slate-400">Stream Status:</span>
+        <span id="streamStatus" class="font-semibold text-amber-400">Disconnected</span>
+      </div>
+    </div>
+
+    <!-- Hidden Audio Player -->
+    <audio id="remoteAudio" autoplay playsinline></audio>
+
+    <div class="flex gap-3">
+      <button id="listenBtn" class="flex-1 bg-sky-600 hover:bg-sky-500 active:scale-95 transition py-3 rounded-xl font-semibold">
+        Listen Live
+      </button>
+      <button id="disconnectBtn" disabled class="flex-1 bg-rose-600/40 text-slate-400 cursor-not-allowed py-3 rounded-xl font-semibold">
+        Disconnect
+      </button>
+    </div>
+
+    <p id="adminMsg" class="text-xs text-slate-400 text-center">
+      Sender ka mic online hone par Listen Live par tap karein.
+    </p>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import { getDatabase, ref, set, push, remove, onValue, onChildAdded } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyBreKyB3T86Splnglbkc_0UovQWRSjeMYg",
+      authDomain: "location-4ccb2.firebaseapp.com",
+      databaseURL: "https://location-4ccb2-default-rtdb.firebaseio.com",
+      projectId: "location-4ccb2",
+      storageBucket: "location-4ccb2.firebasestorage.app",
+      messagingSenderId: "93197601592",
+      appId: "1:93197601592:web:dd7e816a55b0c8ccd98fcd"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+
+    const DEVICE_ID = "device_01";
+    const micStatusRef = ref(db, `devices/${DEVICE_ID}/micStatus`);
+    const webrtcRef = ref(db, `devices/${DEVICE_ID}/webrtc`);
+    const offerRef = ref(db, `devices/${DEVICE_ID}/webrtc/offer`);
+    const answerRef = ref(db, `devices/${DEVICE_ID}/webrtc/answer`);
+    const adminCandRef = ref(db, `devices/${DEVICE_ID}/webrtc/adminCandidates`);
+    const senderCandRef = ref(db, `devices/${DEVICE_ID}/webrtc/senderCandidates`);
+
+    const rtcConfig = {
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" }
+      ]
+    };
+
+    let pc = null;
+    let unsubAnswer = null;
+    let unsubSenderCand = null;
+
+    const senderBadge = document.getElementById("senderBadge");
+    const streamStatus = document.getElementById("streamStatus");
+    const remoteAudio = document.getElementById("remoteAudio");
+    const listenBtn = document.getElementById("listenBtn");
+    const disconnectBtn = document.getElementById("disconnectBtn");
+    const adminMsg = document.getElementById("adminMsg");
+
+    onValue(micStatusRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data && data.active) {
+        senderBadge.textContent = "Mic Online";
+        senderBadge.className = "text-xs px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-400 font-semibold";
+      } else {
+        senderBadge.textContent = "Mic Offline";
+        senderBadge.className = "text-xs px-3 py-1 rounded-full bg-rose-500/20 text-rose-400 font-semibold";
+      }
+    });
+
+    function cleanup() {
+      if (unsubAnswer) { unsubAnswer(); unsubAnswer = null; }
+      if (unsubSenderCand) { unsubSenderCand(); unsubSenderCand = null; }
+      if (pc) { pc.close(); pc = null; }
+      remoteAudio.srcObject = null;
+    }
+
+    listenBtn.addEventListener("click", async () => {
+      try {
+        cleanup();
+        await remove(webrtcRef);
+
+        streamStatus.textContent = "Connecting...";
+        streamStatus.className = "font-semibold text-sky-400";
+        adminMsg.textContent = "Sender device se audio connect ho raha hai...";
+
+        pc = new RTCPeerConnection(rtcConfig);
+        pc.addTransceiver("audio", { direction: "recvonly" });
+
+        pc.ontrack = (event) => {
+          remoteAudio.srcObject = event.streams[0];
+          remoteAudio.play().catch((e) => console.error("Audio play error:", e));
+        };
+
+        pc.onicecandidate = (event) => {
+          if (event.candidate) {
+            push(adminCandRef, event.candidate.toJSON());
+          }
+        };
+
+        pc.onconnectionstatechange = () => {
+          if (!pc) return;
+          if (pc.connectionState === "connected") {
+            streamStatus.textContent = "Listening Live";
+            streamStatus.className = "font-semibold text-emerald-400";
+            adminMsg.textContent = "Live audio chal raha hai (phone ka volume badhayein).";
+          } else if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+            streamStatus.textContent = "Disconnected";
+            streamStatus.className = "font-semibold text-rose-400";
+          }
+        };
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await set(offerRef, { type: offer.type, sdp: offer.sdp });
+
+        const pendingCandidates = [];
+
+        unsubAnswer = onValue(answerRef, async (snapshot) => {
+          const answer = snapshot.val();
+          if (!answer || !pc || pc.currentRemoteDescription) return;
+          await pc.setRemoteDescription(new RTCSessionDescription(answer));
+          for (const c of pendingCandidates) {
+            await pc.addIceCandidate(new RTCIceCandidate(c));
+          }
+        });
+
+        unsubSenderCand = onChildAdded(senderCandRef, async (candSnap) => {
+          const cand = candSnap.val();
+          if (!cand || !pc) return;
+          if (pc.remoteDescription) {
+            await pc.addIceCandidate(new RTCIceCandidate(cand));
+          } else {
+            pendingCandidates.push(cand);
+          }
+        });
+
+        listenBtn.disabled = true;
+        listenBtn.className = "flex-1 bg-sky-600/40 text-slate-400 cursor-not-allowed py-3 rounded-xl font-semibold";
+        disconnectBtn.disabled = false;
+        disconnectBtn.className = "flex-1 bg-rose-600 hover:bg-rose-500 active:scale-95 transition py-3 rounded-xl font-semibold";
+
+      } catch (err) {
+        adminMsg.textContent = `Connection Error: ${err.message}`;
+      }
+    });
+
+    disconnectBtn.addEventListener("click", async () => {
+      cleanup();
+      await remove(webrtcRef);
+
+      streamStatus.textContent = "Disconnected";
+      streamStatus.className = "font-semibold text-amber-400";
+      adminMsg.textContent = "Audio stream band kar diya gaya hai.";
+
+      listenBtn.disabled = false;
+      listenBtn.className = "flex-1 bg-sky-600 hover:bg-sky-500 active:scale-95 transition py-3 rounded-xl font-semibold";
+      disconnectBtn.disabled = true;
+      disconnectBtn.className = "flex-1 bg-rose-600/40 text-slate-400 cursor-not-allowed py-3 rounded-xl font-semibold";
+    });
+  </script>
+</body>
+</html>
