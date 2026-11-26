@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Admin Live Tracker</title>
+  <title>Admin Live Tracker & Audio</title>
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-slate-950 text-white h-screen flex flex-col">
@@ -11,40 +11,62 @@
   <!-- Top Bar -->
   <header class="bg-slate-900 border-b border-slate-800 px-4 py-3 flex items-center justify-between">
     <div>
-      <h1 class="text-lg font-bold leading-tight">Admin Live Map</h1>
+      <h1 class="text-base font-bold leading-tight">Admin Live Monitor</h1>
       <p class="text-xs text-slate-400">Device: <span class="text-slate-200 font-mono">device_01</span></p>
     </div>
-    <span id="deviceBadge" class="text-xs px-3 py-1 rounded-full bg-slate-800 text-slate-400 font-semibold">
-      Waiting...
-    </span>
+    <div class="flex items-center gap-1.5">
+      <span id="micBadge" class="text-[11px] px-2.5 py-1 rounded-full bg-slate-800 text-slate-400 font-semibold">
+        Mic Off
+      </span>
+      <span id="deviceBadge" class="text-[11px] px-2.5 py-1 rounded-full bg-slate-800 text-slate-400 font-semibold">
+        Waiting...
+      </span>
+    </div>
   </header>
 
   <!-- Map Container -->
   <div id="map" class="flex-1 w-full bg-slate-900"></div>
 
-  <!-- Bottom Info Card -->
-  <footer class="bg-slate-900 border-t border-slate-800 p-4 grid grid-cols-3 gap-2 text-center text-xs">
-    <div class="bg-slate-800/70 rounded-xl p-2.5">
-      <p class="text-slate-400">Coordinates</p>
-      <p id="coords" class="font-mono text-slate-100 mt-1">--</p>
+  <!-- Live Audio Control Bar -->
+  <section class="bg-slate-900 border-t border-slate-800 px-4 py-3 flex items-center justify-between gap-3">
+    <div class="min-w-0">
+      <p class="text-xs font-semibold text-slate-200">Live Surround Audio</p>
+      <p id="streamStatus" class="text-[11px] text-amber-400 truncate">Disconnected</p>
     </div>
-    <div class="bg-slate-800/70 rounded-xl p-2.5">
-      <p class="text-slate-400">Accuracy</p>
-      <p id="accuracy" class="font-semibold text-sky-400 mt-1">-- m</p>
+    <audio id="remoteAudio" autoplay playsinline></audio>
+    <div class="flex gap-2 shrink-0">
+      <button id="listenBtn" class="bg-sky-600 hover:bg-sky-500 active:scale-95 transition px-3.5 py-2 rounded-xl text-xs font-semibold">
+        Listen Live
+      </button>
+      <button id="disconnectBtn" disabled class="bg-rose-600/40 text-slate-400 cursor-not-allowed px-3.5 py-2 rounded-xl text-xs font-semibold">
+        Stop
+      </button>
     </div>
-    <div class="bg-slate-800/70 rounded-xl p-2.5">
-      <p class="text-slate-400">Last Updated</p>
-      <p id="lastUpdated" class="font-semibold text-amber-400 mt-1">--</p>
+  </section>
+
+  <!-- Bottom Location Info -->
+  <footer class="bg-slate-950 border-t border-slate-800 p-3 grid grid-cols-3 gap-2 text-center text-xs">
+    <div class="bg-slate-900 rounded-xl p-2">
+      <p class="text-slate-400 text-[11px]">Coordinates</p>
+      <p id="coords" class="font-mono text-slate-100 mt-0.5 text-[11px]">--</p>
+    </div>
+    <div class="bg-slate-900 rounded-xl p-2">
+      <p class="text-slate-400 text-[11px]">Accuracy</p>
+      <p id="accuracy" class="font-semibold text-sky-400 mt-0.5 text-[11px]">-- m</p>
+    </div>
+    <div class="bg-slate-900 rounded-xl p-2">
+      <p class="text-slate-400 text-[11px]">Last Updated</p>
+      <p id="lastUpdated" class="font-semibold text-amber-400 mt-0.5 text-[11px]">--</p>
     </div>
   </footer>
 
   <!-- Google Maps JS API -->
   <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCxUf2eNGTTOIG0ySfG7wgCEGVaSbl70o8"></script>
 
-  <!-- Firebase SDKs -->
+  <!-- Firebase & WebRTC -->
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-    import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+    import { getDatabase, ref, set, push, remove, onValue, onChildAdded } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
     const firebaseConfig = {
       apiKey: "AIzaSyBreKyB3T86Splnglbkc_0UovQWRSjeMYg",
@@ -62,50 +84,161 @@
     const DEVICE_ID = "device_01";
     const liveRef = ref(db, `devices/${DEVICE_ID}/live`);
     const statusRef = ref(db, `devices/${DEVICE_ID}/status`);
+    const micStatusRef = ref(db, `devices/${DEVICE_ID}/micStatus`);
+    const webrtcRef = ref(db, `devices/${DEVICE_ID}/webrtc`);
+    const offerRef = ref(db, `devices/${DEVICE_ID}/webrtc/offer`);
+    const answerRef = ref(db, `devices/${DEVICE_ID}/webrtc/answer`);
+    const adminCandRef = ref(db, `devices/${DEVICE_ID}/webrtc/adminCandidates`);
+    const senderCandRef = ref(db, `devices/${DEVICE_ID}/webrtc/senderCandidates`);
+
+    // Map Setup
+    const map = new google.maps.Map(document.getElementById("map"), {
+      center: { lat: 21.1702, lng: 72.8311 },
+      zoom: 16
+    });
+    const marker = new google.maps.Marker({ map: map, title: "Device Location" });
 
     const deviceBadge = document.getElementById("deviceBadge");
+    const micBadge = document.getElementById("micBadge");
     const coordsEl = document.getElementById("coords");
     const accuracyEl = document.getElementById("accuracy");
     const lastUpdatedEl = document.getElementById("lastUpdated");
 
-    // Default map center (India)
-    const map = new google.maps.Map(document.getElementById("map"), {
-      center: { lat: 21.1702, lng: 72.8311 },
-      zoom: 15,
-      disableDefaultUI: false
-    });
-
-    const marker = new google.maps.Marker({
-      map: map,
-      title: "Device Location"
-    });
-
-    // Listen to Online / Offline status
     onValue(statusRef, (snapshot) => {
       const data = snapshot.val();
       if (!data) return;
-
       if (data.online) {
-        deviceBadge.textContent = "Online (Live)";
-        deviceBadge.className = "text-xs px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-400 font-semibold";
+        deviceBadge.textContent = "GPS Online";
+        deviceBadge.className = "text-[11px] px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-400 font-semibold";
       } else {
-        deviceBadge.textContent = "Offline (Last Known)";
-        deviceBadge.className = "text-xs px-3 py-1 rounded-full bg-rose-500/20 text-rose-400 font-semibold";
+        deviceBadge.textContent = "GPS Offline";
+        deviceBadge.className = "text-[11px] px-2.5 py-1 rounded-full bg-rose-500/20 text-rose-400 font-semibold";
       }
     });
 
-    // Listen to Live / Last Known Location
     onValue(liveRef, (snapshot) => {
       const loc = snapshot.val();
       if (!loc) return;
-
       const pos = { lat: loc.lat, lng: loc.lng };
       marker.setPosition(pos);
       map.panTo(pos);
-
       coordsEl.textContent = `${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}`;
       accuracyEl.textContent = `${loc.accuracy || 0} m`;
       lastUpdatedEl.textContent = new Date(loc.timestamp).toLocaleTimeString();
+    });
+
+    onValue(micStatusRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data && data.active) {
+        micBadge.textContent = "Mic Online";
+        micBadge.className = "text-[11px] px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-400 font-semibold";
+      } else {
+        micBadge.textContent = "Mic Off";
+        micBadge.className = "text-[11px] px-2.5 py-1 rounded-full bg-slate-800 text-slate-400 font-semibold";
+      }
+    });
+
+    // WebRTC Audio Receiver
+    const rtcConfig = {
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" }
+      ]
+    };
+
+    let pc = null;
+    let unsubAnswer = null;
+    let unsubSenderCand = null;
+
+    const streamStatus = document.getElementById("streamStatus");
+    const remoteAudio = document.getElementById("remoteAudio");
+    const listenBtn = document.getElementById("listenBtn");
+    const disconnectBtn = document.getElementById("disconnectBtn");
+
+    function cleanupAudio() {
+      if (unsubAnswer) { unsubAnswer(); unsubAnswer = null; }
+      if (unsubSenderCand) { unsubSenderCand(); unsubSenderCand = null; }
+      if (pc) { pc.close(); pc = null; }
+      remoteAudio.srcObject = null;
+    }
+
+    listenBtn.addEventListener("click", async () => {
+      try {
+        cleanupAudio();
+        await remove(webrtcRef);
+
+        streamStatus.textContent = "Connecting...";
+        streamStatus.className = "text-[11px] text-sky-400 truncate";
+
+        pc = new RTCPeerConnection(rtcConfig);
+        pc.addTransceiver("audio", { direction: "recvonly" });
+
+        pc.ontrack = (event) => {
+          remoteAudio.srcObject = event.streams[0];
+          remoteAudio.play().catch((e) => console.error("Audio play error:", e));
+        };
+
+        pc.onicecandidate = (event) => {
+          if (event.candidate) {
+            push(adminCandRef, event.candidate.toJSON());
+          }
+        };
+
+        pc.onconnectionstatechange = () => {
+          if (!pc) return;
+          if (pc.connectionState === "connected") {
+            streamStatus.textContent = "Listening Live (Volume Badhayein)";
+            streamStatus.className = "text-[11px] text-emerald-400 truncate";
+          } else if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+            streamStatus.textContent = "Disconnected";
+            streamStatus.className = "text-[11px] text-rose-400 truncate";
+          }
+        };
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await set(offerRef, { type: offer.type, sdp: offer.sdp });
+
+        const pendingCandidates = [];
+
+        unsubAnswer = onValue(answerRef, async (snapshot) => {
+          const answer = snapshot.val();
+          if (!answer || !pc || pc.currentRemoteDescription) return;
+          await pc.setRemoteDescription(new RTCSessionDescription(answer));
+          for (const c of pendingCandidates) {
+            await pc.addIceCandidate(new RTCIceCandidate(c));
+          }
+        });
+
+        unsubSenderCand = onChildAdded(senderCandRef, async (candSnap) => {
+          const cand = candSnap.val();
+          if (!cand || !pc) return;
+          if (pc.remoteDescription) {
+            await pc.addIceCandidate(new RTCIceCandidate(cand));
+          } else {
+            pendingCandidates.push(cand);
+          }
+        });
+
+        listenBtn.disabled = true;
+        listenBtn.className = "bg-sky-600/40 text-slate-400 cursor-not-allowed px-3.5 py-2 rounded-xl text-xs font-semibold";
+        disconnectBtn.disabled = false;
+        disconnectBtn.className = "bg-rose-600 hover:bg-rose-500 active:scale-95 transition px-3.5 py-2 rounded-xl text-xs font-semibold";
+      } catch (err) {
+        streamStatus.textContent = `Error: ${err.message}`;
+      }
+    });
+
+    disconnectBtn.addEventListener("click", async () => {
+      cleanupAudio();
+      await remove(webrtcRef);
+      streamStatus.textContent = "Disconnected";
+      streamStatus.className = "text-[11px] text-amber-400 truncate";
+
+      listenBtn.disabled = false;
+      listenBtn.className = "bg-sky-600 hover:bg-sky-500 active:scale-95 transition px-3.5 py-2 rounded-xl text-xs font-semibold";
+      disconnectBtn.disabled = true;
+      disconnectBtn.className = "bg-rose-600/40 text-slate-400 cursor-not-allowed px-3.5 py-2 rounded-xl text-xs font-semibold";
     });
   </script>
 </body>
